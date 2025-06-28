@@ -1,11 +1,15 @@
-# supabase_client.py
 from dotenv import load_dotenv
 import os
 from supabase import create_client, Client
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# MAIN: baseforcoc.com
+SUPABASE_URL_MAIN = os.getenv("SUPABASE_URL_MAIN")
+SUPABASE_KEY_MAIN = os.getenv("SUPABASE_KEY_MAIN")
+supabase_main: Client = create_client(SUPABASE_URL_MAIN, SUPABASE_KEY_MAIN)
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# SECONDARY: eventueel andere app
+SUPABASE_URL_SECOND = os.getenv("SUPABASE_URL_SECOND")
+SUPABASE_KEY_SECOND = os.getenv("SUPABASE_KEY_SECOND")
+supabase_second: Client = create_client(SUPABASE_URL_SECOND, SUPABASE_KEY_SECOND)

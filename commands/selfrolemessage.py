@@ -1,189 +1,561 @@
+# commands/selfrolemessage.py
+
+import asyncio
 import discord
 from discord.ext import commands
-from discord import app_commands
+from supabase_client import supabase_main
 
-# Jouw bestaande role/emoji data blijft zoals het is
-# (die moet in dit bestand beschikbaar zijn, of importeer uit aparte module)
-# 🎯 ROLE IDs (update if needed)
-TH_ROLES = {
-    "th4": 1273251323055312978,
-    "th5": 1144703356175130725,
-    "th6": 1144703438274445342,
-    "th7": 1158443301372964925,
-    "th8": 1158443376006418492,
-    "th9": 1130468090778505237,
-    "th10": 1130468030883840121,
-    "th11": 1130467969525366865,
-    "th12": 1130467908062040145,
-    "th13": 1130467849689891037,
-    "th14": 1130467784799821824,
-    "th15": 1130467588825169941,
-    "th16": 1273251153701900411,
-    "th17": 1336347775192797285
-}
+# ───── CONSTANTEN ─────────────────────────────────────────────────────────────
 
-BH_ROLES = {
-    "bh4": 1371658591530127451,
-    "bh5": 1371658639072432138,
-    "bh6": 1371658721557741649,
-    "bh7": 1371658784803393567,
-    "bh8": 1371658925224497286,
-    "bh9": 1371658975572918294,
-    "bh10": 1371659024411656245
-}
+SELFROLES_CATEGORY_ID = 1047161799730020442  # De categorie-id voor persoonlijke kanalen
 
-LOGO_EMOJI = "<:logo:1371668120074190848>"
+# ───── HELPERS ─────────────────────────────────────────────────────────────────
 
-TH_EMOJIS = {
-    "th4": {"id": 1371662629700898827, "name": "th4"},
-    "th5": {"id": 1371662633010331838, "name": "th5"},
-    "th6": {"id": 1371662634989916211, "name": "th6"},
-    "th7": {"id": 1371662636621627462, "name": "th7"},
-    "th8": {"id": 1371662639372963900, "name": "th8"},
-    "th9": {"id": 1371662641290022943, "name": "th9"},
-    "th10": {"id": 1371662650957762661, "name": "th10"},
-    "th11": {"id": 1371662653965209650, "name": "th11"},
-    "th12": {"id": 1371662656238391306, "name": "th12"},
-    "th13": {"id": 1371662657777832096, "name": "th13"},
-    "th14": {"id": 1371662660256534548, "name": "th14"},
-    "th15": {"id": 1371662661493850173, "name": "th15"},
-    "th16": {"id": 1371662663561777287, "name": "th16"},
-    "th17": {"id": 1371662666426351818, "name": "th17"}
-}
+async def get_all_th_roles():
+    resp = supabase_main.table("th_roles").select("*").execute()
+    return resp.data or []
 
-BH_EMOJIS = {
-    "bh4": {"id": 1371662610927452200, "name": "bh4"},
-    "bh5": {"id": 1371662613393702972, "name": "bh5"},
-    "bh6": {"id": 1371662616023273573, "name": "bh6"},
-    "bh7": {"id": 1371662617524830279, "name": "bh7"},
-    "bh8": {"id": 1371662619370459287, "name": "bh8"},
-    "bh9": {"id": 1371662620976873503, "name": "bh9"},
-    "bh10": {"id": 1371662622923034686, "name": "bh10"}
-}
+async def get_all_bh_roles():
+    resp = supabase_main.table("bh_roles").select("*").execute()
+    return resp.data or []
 
-# 🔽 TH Selector
-class THSelect(discord.ui.Select):
-    def __init__(self, member: discord.Member):
+def upsert_user_selection(user_id: int, th_ids=None, bh_ids=None, channel_id=None, message_id=None):
+    payload = {"user_id": user_id}
+    if th_ids is not None:
+        payload["th_ids"] = th_ids
+    if bh_ids is not None:
+        payload["bh_ids"] = bh_ids
+    if channel_id is not None:
+        payload["channel_id"] = channel_id
+    if message_id is not None:
+        payload["message_id"] = message_id
+    supabase_main.table("user_main_messages").upsert(payload).execute()
+
+def get_user_selection(user_id: int):
+    resp = (
+        supabase_main
+        .table("user_main_messages")
+        .select("*")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    return resp.data
+
+# ───── EMBED BUILDER ────────────────────────────────────────────────────────────
+
+def build_role_overview_embed(member: discord.Member):
+    row = get_user_selection(member.id) or {}
+    th_ids = row.get("th_ids") or []
+    bh_ids = row.get("bh_ids") or []
+
+    # Haal emoji‐gegevens op uit Supabase in plaats van labels
+    th_records = (
+        supabase_main
+        .table("th_roles")
+        .select("emoji_id", "emoji_name")
+        .in_("role_id", th_ids)
+        .execute()
+        .data
+        or []
+    )
+    th_labels = [f"<:{r['emoji_name']}:{r['emoji_id']}>" for r in th_records]
+
+    bh_records = (
+        supabase_main
+        .table("bh_roles")
+        .select("emoji_id", "emoji_name")
+        .in_("role_id", bh_ids)
+        .execute()
+        .data
+        or []
+    )
+    bh_labels = [f"<:{r['emoji_name']}:{r['emoji_id']}>" for r in bh_records]
+
+    embed = discord.Embed(
+        title=f"{member.display_name}'s Role Overview",
+        color=discord.Color.gold(),
+        description="Below are the roles you chose:"
+    )
+    embed.add_field(name="🏠 Town Hall", value=" ".join(th_labels) or "None", inline=False)
+    embed.add_field(name="🛠 Builder Hall", value=" ".join(bh_labels) or "None", inline=False)
+    return embed
+
+# ───── PERSOONSGEBONDEN KANAAL AANMAKEN ────────────────────────────────────────
+
+async def create_personal_selfroles_channel(member: discord.Member):
+    guild = member.guild
+    category = guild.get_channel(SELFROLES_CATEGORY_ID)
+    if category is None:
+        return  # categorie bestaat niet of bot mist rechten
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+    }
+
+    # Wissel bestaand kanaal uit
+    existing = discord.utils.get(guild.text_channels, name=f"roles-{member.name}".lower())
+    if existing:
+        await existing.delete()
+
+    channel = await guild.create_text_channel(
+        name=f"roles-{member.name}".lower(),
+        overwrites=overwrites,
+        category=category
+    )
+
+    embed = build_role_overview_embed(member)
+    view = OverviewView(member)
+    msg = await channel.send(content=member.mention, embed=embed, view=view)
+
+    upsert_user_selection(member.id, channel_id=channel.id, message_id=msg.id)
+
+# ───── INITIAL DROPDOWNS (WELCOME‐KANAAL) ───────────────────────────────────────
+
+class InitialTHSelect(discord.ui.Select):
+    def __init__(self, member: discord.Member, th_options):
         options = []
-        for th, role_id in TH_ROLES.items():
-            role = member.guild.get_role(role_id)
-            emoji = TH_EMOJIS.get(th)
-            options.append(discord.SelectOption(
-                label=th.upper(),
-                value=str(role_id),
-                emoji=discord.PartialEmoji(id=emoji["id"], name=emoji["name"]) if emoji else None,
-                default=role in member.roles if role else False
-            ))
+        for r in th_options:
+            label    = r["label"]
+            role_id  = r["role_id"]
+            emoji    = discord.PartialEmoji(id=r["emoji_id"], name=r["emoji_name"])
+            role_obj = member.guild.get_role(role_id)
+            default  = role_obj in member.roles if role_obj else False
+            options.append(discord.SelectOption(label=label, value=str(role_id), emoji=emoji, default=default))
 
         super().__init__(
             placeholder="Select your Town Hall level(s)",
-            min_values=0,
+            min_values=1,
             max_values=len(options),
             options=options,
-            custom_id="th_role_selector"
+            custom_id="initial_th_role_selector"
         )
+        self.member = member
 
     async def callback(self, interaction: discord.Interaction):
-        selected_ids = set(int(role_id) for role_id in self.values)
-        all_ids = set(TH_ROLES.values())
+        member       = interaction.user
+        selected_ids = [int(v) for v in self.values]
 
-        roles_to_add = []
-        roles_to_remove = []
+        # Rollen toekennen/verwijderen
+        all_th     = await get_all_th_roles()
+        all_th_ids = {r["role_id"] for r in all_th}
 
-        for role_id in all_ids:
-            role = interaction.guild.get_role(role_id)
-            if role_id in selected_ids and role not in interaction.user.roles:
-                roles_to_add.append(role)
-            elif role_id not in selected_ids and role in interaction.user.roles:
-                roles_to_remove.append(role)
+        to_add, to_remove = [], []
+        for rid in all_th_ids:
+            role_obj = interaction.guild.get_role(rid)
+            if rid in selected_ids and role_obj not in member.roles:
+                to_add.append(role_obj)
+            if rid not in selected_ids and role_obj in member.roles:
+                to_remove.append(role_obj)
+        if to_add:
+            await member.add_roles(*to_add)
+        if to_remove:
+            await member.remove_roles(*to_remove)
 
-        if roles_to_add:
-            await interaction.user.add_roles(*roles_to_add)
-        if roles_to_remove:
-            await interaction.user.remove_roles(*roles_to_remove)
+        # Bewaar in Supabase
+        upsert_user_selection(member.id, th_ids=selected_ids)
 
-        await interaction.response.send_message("✅ Your Town Hall roles have been updated.", ephemeral=True)
+        # **Stuur rechtstreeks de BH‐dropdown in hetzelfde kanaal**
+        channel = interaction.channel
+        await channel.send(
+            "✅ Town Hall saved. Now select your Builder Hall level(s):",
+            view=InitialBHSelectView(member, await get_all_bh_roles())
+        )
+        # Let op: we laten dit dropdown‐bericht in het kanaal staan totdat BH‐selectie is afgerond.
 
-class THSelectView(discord.ui.View):
-    def __init__(self, member: discord.Member):
+class InitialTHSelectView(discord.ui.View):
+    def __init__(self, member: discord.Member, th_options):
         super().__init__(timeout=None)
-        self.add_item(THSelect(member))
+        self.add_item(InitialTHSelect(member, th_options))
 
-
-# 🔽 BH Selector
-class BHSelect(discord.ui.Select):
-    def __init__(self, member: discord.Member):
+class InitialBHSelect(discord.ui.Select):
+    def __init__(self, member: discord.Member, bh_options):
         options = []
-        for bh, role_id in BH_ROLES.items():
-            role = member.guild.get_role(role_id)
-            emoji = BH_EMOJIS.get(bh)
-            options.append(discord.SelectOption(
-                label=bh.upper(),
-                value=str(role_id),
-                emoji=discord.PartialEmoji(id=emoji["id"], name=emoji["name"]) if emoji else None,
-                default=role in member.roles if role else False
-            ))
+        for r in bh_options:
+            label    = r["label"]
+            role_id  = r["role_id"]
+            emoji    = discord.PartialEmoji(id=r["emoji_id"], name=r["emoji_name"])
+            role_obj = member.guild.get_role(role_id)
+            default  = role_obj in member.roles if role_obj else False
+            options.append(discord.SelectOption(label=label, value=str(role_id), emoji=emoji, default=default))
 
         super().__init__(
             placeholder="Select your Builder Hall level(s)",
-            min_values=0,
+            min_values=1,
             max_values=len(options),
             options=options,
-            custom_id="bh_role_selector"
+            custom_id="initial_bh_role_selector"
         )
+        self.member = member
 
     async def callback(self, interaction: discord.Interaction):
-        selected_ids = set(int(role_id) for role_id in self.values)
-        all_ids = set(BH_ROLES.values())
+        member       = interaction.user
+        selected_ids = [int(v) for v in self.values]
 
-        roles_to_add = []
-        roles_to_remove = []
+        # Rollen toekennen/verwijderen
+        all_bh     = await get_all_bh_roles()
+        all_bh_ids = {r["role_id"] for r in all_bh}
 
-        for role_id in all_ids:
-            role = interaction.guild.get_role(role_id)
-            if role_id in selected_ids and role not in interaction.user.roles:
-                roles_to_add.append(role)
-            elif role_id not in selected_ids and role in interaction.user.roles:
-                roles_to_remove.append(role)
+        to_add, to_remove = [], []
+        for rid in all_bh_ids:
+            role_obj = interaction.guild.get_role(rid)
+            if rid in selected_ids and role_obj not in member.roles:
+                to_add.append(role_obj)
+            if rid not in selected_ids and role_obj in member.roles:
+                to_remove.append(role_obj)
+        if to_add:
+            await member.add_roles(*to_add)
+        if to_remove:
+            await member.remove_roles(*to_remove)
 
-        if roles_to_add:
-            await interaction.user.add_roles(*roles_to_add)
-        if roles_to_remove:
-            await interaction.user.remove_roles(*roles_to_remove)
+        # Bewaar in Supabase
+        upsert_user_selection(member.id, bh_ids=selected_ids)
 
-        await interaction.response.send_message("✅ Your Builder Hall roles have been updated.", ephemeral=True)
+        # **Maak persoonlijk kanaal én stuur follow‐up**
+        await interaction.response.send_message(
+            "✅ All done! Your personal Role Overview channel has been created.",
+            ephemeral=True
+        )
+        await create_personal_selfroles_channel(member)
 
-class BHSelectView(discord.ui.View):
+        # **Vervolgens het welcome‐kanaal weggooien**
+        try:
+            await interaction.channel.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+class InitialBHSelectView(discord.ui.View):
+    def __init__(self, member: discord.Member, bh_options):
+        super().__init__(timeout=None)
+        self.add_item(InitialBHSelect(member, bh_options))
+
+# ───── EDIT‐DROPDOWNS (OVERVIEW‐KANAAL) ─────────────────────────────────────────
+
+class EditTHSelect(discord.ui.Select):
+    def __init__(self, member: discord.Member, th_options, dropdown_msg_id: int, dropdown_channel_id: int, overview_msg_id: int, overview_channel_id: int):
+        options = []
+        sel = get_user_selection(member.id) or {}
+        saved_th_ids = set(sel.get("th_ids") or [])
+
+        for r in th_options:
+            label   = r["label"]
+            role_id = r["role_id"]
+            emoji   = discord.PartialEmoji(id=r["emoji_id"], name=r["emoji_name"])
+            default = (role_id in saved_th_ids)
+            options.append(discord.SelectOption(label=label, value=str(role_id), emoji=emoji, default=default))
+
+        super().__init__(
+            placeholder="Select your Town Hall level(s)",
+            min_values=1,
+            max_values=len(options),
+            options=options,
+            custom_id="edit_th_role_selector"
+        )
+        self.member              = member
+        self.dropdown_msg_id     = dropdown_msg_id
+        self.dropdown_channel_id = dropdown_channel_id
+        self.overview_msg_id     = overview_msg_id
+        self.overview_channel_id = overview_channel_id
+
+    async def callback(self, interaction: discord.Interaction):
+        member       = interaction.user
+        selected_ids = [int(v) for v in self.values]
+
+        # 1) Rollen toekennen / verwijderen
+        all_th     = await get_all_th_roles()
+        all_th_ids = {r["role_id"] for r in all_th}
+
+        to_add, to_remove = [], []
+        for rid in all_th_ids:
+            role_obj = interaction.guild.get_role(rid)
+            if rid in selected_ids and role_obj not in member.roles:
+                to_add.append(role_obj)
+            if rid not in selected_ids and role_obj in member.roles:
+                to_remove.append(role_obj)
+        if to_add:
+            await member.add_roles(*to_add)
+        if to_remove:
+            await member.remove_roles(*to_remove)
+
+        # 2) Bewaar nieuwe th_ids in Supabase
+        upsert_user_selection(member.id, th_ids=selected_ids)
+
+        # 3) Werk overview‐embed bij
+        overview_chan = interaction.guild.get_channel(self.overview_channel_id)
+        if overview_chan:
+            try:
+                overview_msg = await overview_chan.fetch_message(self.overview_msg_id)
+                await overview_msg.edit(embed=build_role_overview_embed(member), view=OverviewView(member))
+            except discord.NotFound:
+                pass
+
+        # 4) Verwijder de dropdown‐message uit personal kanaal
+        dropdown_chan = interaction.guild.get_channel(self.dropdown_channel_id)
+        if dropdown_chan:
+            try:
+                dropdown_msg = await dropdown_chan.fetch_message(self.dropdown_msg_id)
+                await dropdown_msg.delete()
+            except discord.NotFound:
+                pass
+
+        # 5) Stuur korte bevestiging in personal kanaal en verwijder na 3 seconden
+        if overview_chan:
+            temp = await overview_chan.send(f"{member.mention} ✅ Town Hall updated!")
+            await asyncio.sleep(3)
+            try:
+                await temp.delete()
+            except:
+                pass
+
+        # 6) ACK (wrapped in try/except om “Unknown interaction” te voorkomen)
+        try:
+            await interaction.response.defer()
+        except discord.errors.NotFound:
+            pass
+
+class EditTHSelectView(discord.ui.View):
+    def __init__(self, member: discord.Member, th_options, dropdown_msg_id: int, dropdown_channel_id: int, overview_msg_id: int, overview_channel_id: int):
+        super().__init__(timeout=None)
+        self.add_item(EditTHSelect(member, th_options, dropdown_msg_id, dropdown_channel_id, overview_msg_id, overview_channel_id))
+
+
+class EditBHSelect(discord.ui.Select):
+    def __init__(self, member: discord.Member, bh_options, dropdown_msg_id: int, dropdown_channel_id: int, overview_msg_id: int, overview_channel_id: int):
+        options = []
+        sel = get_user_selection(member.id) or {}
+        saved_bh_ids = set(sel.get("bh_ids") or [])
+
+        for r in bh_options:
+            label   = r["label"]
+            role_id = r["role_id"]
+            emoji   = discord.PartialEmoji(id=r["emoji_id"], name=r["emoji_name"])
+            default = (role_id in saved_bh_ids)
+            options.append(discord.SelectOption(label=label, value=str(role_id), emoji=emoji, default=default))
+
+        super().__init__(
+            placeholder="Select your Builder Hall level(s)",
+            min_values=1,
+            max_values=len(options),
+            options=options,
+            custom_id="edit_bh_role_selector"
+        )
+        self.member              = member
+        self.dropdown_msg_id     = dropdown_msg_id
+        self.dropdown_channel_id = dropdown_channel_id
+        self.overview_msg_id     = overview_msg_id
+        self.overview_channel_id = overview_channel_id
+
+    async def callback(self, interaction: discord.Interaction):
+        member       = interaction.user
+        selected_ids = [int(v) for v in self.values]
+
+        # 1) Rollen toekennen / verwijderen
+        all_bh     = await get_all_bh_roles()
+        all_bh_ids = {r["role_id"] for r in all_bh}
+
+        to_add, to_remove = [], []
+        for rid in all_bh_ids:
+            role_obj = interaction.guild.get_role(rid)
+            if rid in selected_ids and role_obj not in member.roles:
+                to_add.append(role_obj)
+            if rid not in selected_ids and role_obj in member.roles:
+                to_remove.append(role_obj)
+        if to_add:
+            await member.add_roles(*to_add)
+        if to_remove:
+            await member.remove_roles(*to_remove)
+
+        # 2) Bewaar nieuwe bh_ids in Supabase
+        upsert_user_selection(member.id, bh_ids=selected_ids)
+
+        # 3) Werk overview‐embed bij
+        overview_chan = interaction.guild.get_channel(self.overview_channel_id)
+        if overview_chan:
+            try:
+                overview_msg = await overview_chan.fetch_message(self.overview_msg_id)
+                await overview_msg.edit(embed=build_role_overview_embed(member), view=OverviewView(member))
+            except discord.NotFound:
+                pass
+
+        # 4) Verwijder de dropdown‐message uit personal kanaal
+        dropdown_chan = interaction.guild.get_channel(self.dropdown_channel_id)
+        if dropdown_chan:
+            try:
+                dropdown_msg = await dropdown_chan.fetch_message(self.dropdown_msg_id)
+                await dropdown_msg.delete()
+            except discord.NotFound:
+                pass
+
+        # 5) Stuur korte bevestiging in personal kanaal en verwijder na 3 seconden
+        if overview_chan:
+            temp = await overview_chan.send(f"{member.mention} ✅ Builder Hall updated!")
+            await asyncio.sleep(3)
+            try:
+                await temp.delete()
+            except:
+                pass
+
+        # 6) ACK (wrapped in try/except om “Unknown interaction” te voorkomen)
+        try:
+            await interaction.response.defer()
+        except discord.errors.NotFound:
+            pass
+
+class EditBHSelectView(discord.ui.View):
+    def __init__(self, member: discord.Member, bh_options, dropdown_msg_id: int, dropdown_channel_id: int, overview_msg_id: int, overview_channel_id: int):
+        super().__init__(timeout=None)
+        self.add_item(EditBHSelect(member, bh_options, dropdown_msg_id, dropdown_channel_id, overview_msg_id, overview_channel_id))
+
+# ───── OVERVIEW VIEW ───────────────────────────────────────────────────────────
+
+class OverviewView(discord.ui.View):
     def __init__(self, member: discord.Member):
         super().__init__(timeout=None)
-        self.add_item(BHSelect(member))
+        self.member = member
 
+    @discord.ui.button(label="Save Town Hall", style=discord.ButtonStyle.primary, custom_id="btn_edit_th")
+    async def edit_th(self, interaction: discord.Interaction, button: discord.ui.Button):
+        sel = get_user_selection(self.member.id)
+        if not sel:
+            return await interaction.response.send_message("❌ No overview found.", ephemeral=True)
 
-# 🔧 Command COG
-class ClashRoleSelectors(commands.Cog):
+        overview_channel_id = sel.get("channel_id")
+        overview_msg_id     = sel.get("message_id")
+        if not overview_channel_id or not overview_msg_id:
+            return await interaction.response.send_message("❌ No overview message to edit.", ephemeral=True)
+
+        overview_chan = interaction.guild.get_channel(overview_channel_id)
+        if not overview_chan:
+            return await interaction.response.send_message("❌ Could not find your personal channel.", ephemeral=True)
+
+        # Haal opnieuw de meest recente TH‐opties
+        th_opts = await get_all_th_roles()
+
+        # 1) Maak de dropdown‐bericht in het persoonlijke kanaal
+        dropdown_channel = overview_chan
+        dropdown_msg = await dropdown_channel.send(
+            "Please select your Town Hall level(s):",
+            view=EditTHSelectView(
+                self.member,
+                th_opts,
+                dropdown_msg_id=None,  # vul hieronder in na het versturen
+                dropdown_channel_id=dropdown_channel.id,
+                overview_msg_id=overview_msg_id,
+                overview_channel_id=overview_channel_id
+            )
+        )
+        # 2) Nu we know dropdown_msg.id, updaten we de view zodat de select weet wat te verwijderen
+        await dropdown_msg.edit(
+            view=EditTHSelectView(
+                self.member,
+                th_opts,
+                dropdown_msg.id,
+                dropdown_channel.id,
+                overview_msg_id,
+                overview_channel_id
+            )
+        )
+
+        # ACK dat dropdown is gepost
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Save Builder Hall", style=discord.ButtonStyle.secondary, custom_id="btn_edit_bh")
+    async def edit_bh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        sel = get_user_selection(self.member.id)
+        if not sel:
+            return await interaction.response.send_message("❌ No overview found.", ephemeral=True)
+
+        overview_channel_id = sel.get("channel_id")
+        overview_msg_id     = sel.get("message_id")
+        if not overview_channel_id or not overview_msg_id:
+            return await interaction.response.send_message("❌ No overview message to edit.", ephemeral=True)
+
+        overview_chan = interaction.guild.get_channel(overview_channel_id)
+        if not overview_chan:
+            return await interaction.response.send_message("❌ Could not find your personal channel.", ephemeral=True)
+
+        # Haal opnieuw de meest recente BH‐opties
+        bh_opts = await get_all_bh_roles()
+
+        # 1) Maak de dropdown‐bericht in het persoonlijke kanaal
+        dropdown_channel = overview_chan
+        dropdown_msg = await dropdown_channel.send(
+            "Please select your Builder Hall level(s):",
+            view=EditBHSelectView(
+                self.member,
+                bh_opts,
+                dropdown_msg_id=None,  # vul hieronder in na het versturen
+                dropdown_channel_id=dropdown_channel.id,
+                overview_msg_id=overview_msg_id,
+                overview_channel_id=overview_channel_id
+            )
+        )
+        # 2) Nu we know dropdown_msg.id, updaten we de view zodat de select weet wat te verwijderen
+        await dropdown_msg.edit(
+            view=EditBHSelectView(
+                self.member,
+                bh_opts,
+                dropdown_msg.id,
+                dropdown_channel.id,
+                overview_msg_id,
+                overview_channel_id
+            )
+        )
+
+        # ACK dat dropdown is gepost
+        await interaction.response.defer()
+
+# ───── COG SETUP ──────────────────────────────────────────────────────────────
+
+class SelfRoleMessage(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name="throles")
-    @commands.has_permissions(manage_roles=True)
-    async def throles_command(self, ctx):
-        embed = discord.Embed(
-            title="🏰 Select Your Town Hall Level",
-            description="Choose your **Town Hall** roles using the dropdown below.\nUpdate them any time.",
-            color=discord.Color.blue()
-        )
-        await ctx.send(embed=embed, view=THSelectView(ctx.author))
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        guild    = member.guild
+        category = discord.utils.get(guild.categories, name="✅｜start")
 
-    @commands.command(name="bhroles")
-    @commands.has_permissions(manage_roles=True)
-    async def bhroles_command(self, ctx):
-        embed = discord.Embed(
-            title="🛠️ Select Your Builder Hall Level",
-            description="Choose your **Builder Hall** roles using the dropdown below.\nUpdate them any time.",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed, view=BHSelectView(ctx.author))
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        }
 
+        channel = await guild.create_text_channel(
+            name=f"welcome-{member.name}".lower(),
+            overwrites=overwrites,
+            category=category
+        )
+
+        welcome_embed = discord.Embed(
+            title=f"👋 Welcome {member.display_name}!",
+            description=(
+                "First, please select your **Town Hall** level(s) below.\n"
+                "Once you’ve chosen, you’ll be prompted to choose your **Builder Hall** level."
+            ),
+            color=discord.Color.blurple()
+        )
+        await channel.send(embed=welcome_embed)
+
+        th_opts = await get_all_th_roles()
+        await channel.send(content=member.mention, view=InitialTHSelectView(member, th_opts))
+
+    @commands.command(name="rebuild_overview")
+    @commands.has_permissions(administrator=True)
+    async def rebuild_overview_command(self, ctx, member: discord.Member):
+        sel = get_user_selection(member.id)
+        if not sel or not sel.get("channel_id") or not sel.get("message_id"):
+            return await ctx.send("❌ No overview found for that user.")
+        chan = ctx.guild.get_channel(sel["channel_id"])
+        try:
+            msg = await chan.fetch_message(sel["message_id"])
+            await msg.edit(embed=build_role_overview_embed(member), view=OverviewView(member))
+            await ctx.send("✅ Overview rebuilt.")
+        except discord.NotFound:
+            await ctx.send("❌ Could not find the channel of message.")
 
 async def setup(bot):
-    await bot.add_cog(ClashRoleSelectors(bot))
+    await bot.add_cog(SelfRoleMessage(bot))
